@@ -89,6 +89,10 @@ func (chain Chain[T]) NextBlock(data T) Block[T] {
 	}
 }
 
+func (chain Chain[T]) AppendBlock(data T) Chain[T] {
+	return append(chain, chain.NextBlock(data))
+}
+
 func NewChain[T any](datas []T) Chain[T] {
 	n := len(datas)
 	chain := make([]Block[T], n)
@@ -163,6 +167,7 @@ func (chain Chain[T]) Less(other Chain[T]) bool {
 
 type Address [32]byte
 
+// Work across different ledgers
 type Wallet []ecdsa.PrivateKey
 
 func GetWitness(priv *ecdsa.PrivateKey) []byte {
@@ -233,7 +238,11 @@ func NewCoinbaseTransaction(address Address, amount uint64) Transaction {
 
 type Ledger Chain[[]Transaction]
 
-func NewLedger(txn Transaction) Ledger {
+func (ledger *Ledger) Validate() error {
+	return nil // TODO
+}
+
+func NewLedgerWithTransaction(txn Transaction) Ledger {
 	data := []Transaction{txn}
 	return Ledger(NewChain([][]Transaction{data}))
 }
@@ -267,8 +276,7 @@ type UTXO struct {
 func (wallet Wallet) ComputeUtxos(ledger Ledger) []UTXO {
 	var ans []UTXO
 
-	var seen map[TxOutCursor]bool
-
+	seen := make(map[TxOutCursor]bool)
 	for i := len(ledger) - 1; i != -1; i-- {
 		b := &ledger[i]
 		for j := range b.data {
@@ -297,6 +305,14 @@ func (wallet Wallet) ComputeUtxos(ledger Ledger) []UTXO {
 				}
 			}
 		}
+	}
+	return ans
+}
+
+func (wallet Wallet) GetAvailableFunds(ledger Ledger) uint64 {
+	var ans uint64
+	for _, utxo := range wallet.ComputeUtxos(ledger) {
+		ans += utxo.uTxOut.amount
 	}
 	return ans
 }
