@@ -61,7 +61,7 @@ func main() {
 					fmt.Printf("%d recv timeout\n", i)
 				}
 
-				b := NextBlock(node.chain, d)
+				b := node.chain.NextBlock(d)
 
 				// simulate faulty node
 				if i == 0 {
@@ -96,7 +96,7 @@ func main() {
 			b := &node.chain[j]
 			fmt.Printf("%d(%d) ", b.data, b.difficulty)
 		}
-		fmt.Printf("[%d]\n", cumulativeDifficulty(node.chain))
+		fmt.Printf("[%d]\n", node.chain.CumulativeDifficulty())
 		fmt.Println("---")
 	}
 }

@@ -1,19 +1,30 @@
 package main
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestValidate(t *testing.T) {
 	chain := NewChain([]int{0, 1, 2})
-	err := validate(chain)
+	err := chain.Validate()
 	if err != nil {
-		t.Errorf(err.Error())
+		t.Error(err)
 	}
 }
 
 func TestCumulativeDifficulty(t *testing.T) {
 	chain := NewChain([]int{0, 1, 2})
-	cd := cumulativeDifficulty(chain)
+	cd := chain.CumulativeDifficulty()
 	if cd != 3 {
-		t.Fail()
+		t.Error(cd)
+	}
+}
+
+func TestComputeUtxos(t *testing.T) {
+	address, wallet := NewAddressWalletPair()
+	ledger := NewLedger(NewCoinbaseTransaction(address, 1))
+	utxos := wallet.ComputeUtxos(ledger)
+	if len(utxos) != 1 {
+		t.Error(utxos)
 	}
 }
