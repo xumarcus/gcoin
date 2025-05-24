@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"math"
 	"math/bits"
 	"slices"
 	"time"
@@ -167,26 +168,6 @@ func (chain Chain[T]) Less(other Chain[T]) bool {
 
 type Address [32]byte
 
-// Work across different ledgers
-type Wallet []ecdsa.PrivateKey
-
-func GetWitness(priv *ecdsa.PrivateKey) []byte {
-	pub := priv.PublicKey
-	return elliptic.MarshalCompressed(pub.Curve, pub.X, pub.Y)
-}
-
-func GetAddress(priv *ecdsa.PrivateKey) Address {
-	return sha256.Sum256(GetWitness(priv))
-}
-
-func NewAddressWalletPair() (Address, Wallet) {
-	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		panic(err)
-	}
-	return GetAddress(priv), Wallet([]ecdsa.PrivateKey{*priv})
-}
-
 type TxId [32]byte
 
 type TxOut struct {
@@ -194,57 +175,45 @@ type TxOut struct {
 	amount  uint64
 }
 
-type TxOutCursor struct {
+type TxIn struct {
 	txId        TxId
 	txnTxOutIdx uint64
 }
 
-type TxIn struct {
-	uTxOutCursor TxOutCursor
-	witness      []byte
-	signature    []byte
+type Witness struct {
+	sig []byte
+	pub []byte
 }
 
-/*
-	address1 := HASH(PUBKEY1)
-	address2 := HASH(PUBKEY2)
-	Txn1 TxOut [address1]
-	Txn2 TxOut [address2]
-	Txn3 witnesses=[PUBKEY1, PUBKEY2]
-		TxIn [outTxId=Txn1 txnTxOutIdx=0 signature=SIGN(address1, PRIVKEY1)]
-		TxIn [outTxId=Txn2 txnTxOutIdx=0 signature=SIGN(address2, PRIVKEY2)]
-*/
+func (witness *Witness) GetAddress() Address {
+	return sha256.Sum256(witness.pub)
+}
 
 type Transaction struct {
-	txId   TxId
-	txOuts []TxOut
-	txIns  []TxIn
+	txId    TxId
+	txOuts  []TxOut
+	txIns   []TxIn
+	witness Witness
 }
 
 func (txn *Transaction) Validate() error {
 	if txn.txId != txn.ComputeTxId() {
 		return fmt.Errorf("id mismatch")
 	}
+
+	Curve := elliptic.P256()
+	X, Y := elliptic.UnmarshalCompressed(Curve, txn.witness.pub)
+	pub := ecdsa.PublicKey{
+		Curve: Curve,
+		X:     X,
+		Y:     Y,
+	}
+	if !ecdsa.VerifyASN1(&pub, txn.txId[:], txn.witness.sig) {
+		return fmt.Errorf("fail to verify txId with witness")
+	}
+
 	// defer everything else to ledger.Validate()
 	return nil
-}
-
-func NewCoinbaseTransaction(address Address, amount uint64) Transaction {
-	txOut := TxOut{address: address, amount: amount}
-	txn := Transaction{txOuts: []TxOut{txOut}, txIns: []TxIn{}}
-	txn.txId = txn.ComputeTxId()
-	return txn
-}
-
-type Ledger Chain[[]Transaction]
-
-func (ledger *Ledger) Validate() error {
-	return nil // TODO
-}
-
-func NewLedgerWithTransaction(txn Transaction) Ledger {
-	data := []Transaction{txn}
-	return Ledger(NewChain([][]Transaction{data}))
 }
 
 func (txn *Transaction) ComputeTxId() TxId {
@@ -258,9 +227,8 @@ func (txn *Transaction) ComputeTxId() TxId {
 
 	for i := range txn.txIns {
 		txIn := &txn.txIns[i]
-		binary.Write(&buf, binary.BigEndian, txIn.uTxOutCursor.txId)
-		binary.Write(&buf, binary.BigEndian, txIn.uTxOutCursor.txnTxOutIdx)
-		// Ignore witness and signature data
+		binary.Write(&buf, binary.BigEndian, txIn.txId)
+		binary.Write(&buf, binary.BigEndian, txIn.txnTxOutIdx)
 	}
 
 	// Ignore txId
@@ -268,83 +236,150 @@ func (txn *Transaction) ComputeTxId() TxId {
 }
 
 type UTXO struct {
-	uTxOut    TxOut
-	cursor    TxOutCursor
-	walletIdx int
+	unusedTxOut TxOut
+	refTxIn     TxIn
 }
 
-func (wallet Wallet) ComputeUtxos(ledger Ledger) []UTXO {
-	var ans []UTXO
+// Note: nodes can discard transactions in chain after verification (pruning)
+type Ledger struct {
+	chain   Chain[[]Transaction] // SSoT, keep track of timestamps
+	utxoDb  map[Address][]UTXO   // full, complete UTXO set
+	mempool []Transaction        // unconfirmed transactions
+}
 
-	seen := make(map[TxOutCursor]bool)
-	for i := len(ledger) - 1; i != -1; i-- {
-		b := &ledger[i]
+func (ledger *Ledger) Validate() error {
+	return nil // TODO
+}
+
+func (ledger *Ledger) ComputeUtxoDb() map[Address][]UTXO {
+	utxoDb := make(map[Address][]UTXO)
+	seen := make(map[TxIn]bool)
+	for i := len(ledger.chain) - 1; i != -1; i-- {
+		b := &ledger.chain[i]
 		for j := range b.data {
 			txn := &b.data[j]
 			for k := range txn.txIns {
-				txIn := &txn.txIns[k]
-				seen[txIn.uTxOutCursor] = true
+				txIn := txn.txIns[k]
+				seen[txIn] = true
 			}
 			for k := range txn.txOuts {
 				txOut := txn.txOuts[k]
-				walletIdx := slices.IndexFunc(wallet, func(priv ecdsa.PrivateKey) bool {
-					address := GetAddress(&priv)
-					return bytes.Equal(address[:], txOut.address[:])
-				})
-				if walletIdx != -1 {
-					cursor := TxOutCursor{
-						txId:        txn.txId,
-						txnTxOutIdx: uint64(k)}
-					if !seen[cursor] {
-						utxo := UTXO{
-							uTxOut:    txOut,
-							cursor:    cursor,
-							walletIdx: walletIdx}
-						ans = append(ans, utxo)
-					}
+				refTxIn := TxIn{
+					txId:        txn.txId,
+					txnTxOutIdx: uint64(k)}
+				if !seen[refTxIn] {
+					utxo := UTXO{
+						unusedTxOut: txOut,
+						refTxIn:     refTxIn}
+					utxoDb[txOut.address] = append(utxoDb[txOut.address], utxo)
 				}
 			}
 		}
 	}
-	return ans
+	return utxoDb
 }
 
-func (wallet Wallet) GetAvailableFunds(ledger Ledger) uint64 {
+func NewLedgerWithTransaction(txn Transaction) Ledger {
+	data := []Transaction{txn}
+	chain := NewChain([][]Transaction{data})
+	ledger := Ledger{chain: chain}
+	ledger.utxoDb = ledger.ComputeUtxoDb()
+	return ledger
+}
+
+func (uncommitted *Transaction) TransactionFee(ledger *Ledger) (uint64, error) {
 	var ans uint64
-	for _, utxo := range wallet.ComputeUtxos(ledger) {
-		ans += utxo.uTxOut.amount
+	address := uncommitted.witness.GetAddress()
+	utxos := ledger.utxoDb[address]
+	for _, txIn := range uncommitted.txIns {
+		idx := slices.IndexFunc(utxos, func(utxo UTXO) bool {
+			return utxo.refTxIn == txIn
+		})
+		if idx != -1 {
+			ans += utxos[idx].unusedTxOut.amount
+		} else {
+			return math.MaxUint64, fmt.Errorf("txIn %#v invalid", txIn)
+		}
+	}
+	for _, txOut := range uncommitted.txOuts {
+		if ans >= txOut.amount {
+			ans -= txOut.amount
+		} else {
+			return math.MaxUint64, fmt.Errorf("remaining fee=%d < amount=%d", ans, txOut.amount)
+		}
+	}
+	return ans, nil
+}
+
+/*
+ * Wallet represents a cryptocurrency wallet holding a single private key.
+ * It enables cryptographic operations across different blockchain ledgers.
+ */
+type Wallet ecdsa.PrivateKey
+
+func (wallet *Wallet) GetPub() []byte {
+	pub := wallet.PublicKey
+	return elliptic.MarshalCompressed(pub.Curve, pub.X, pub.Y)
+}
+
+func (wallet *Wallet) GetAddress() Address {
+	return sha256.Sum256(wallet.GetPub())
+}
+
+func (wallet *Wallet) MakeWitness(txId TxId) Witness {
+	sig, err := ecdsa.SignASN1(rand.Reader, (*ecdsa.PrivateKey)(wallet), txId[:])
+	if err != nil {
+		panic(err)
+	}
+	return Witness{
+		sig: sig,
+		pub: wallet.GetPub()}
+}
+
+func NewWallet() Wallet {
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		panic(err)
+	}
+	return Wallet(*priv)
+}
+
+func (wallet *Wallet) GetAvailableFunds(ledger *Ledger) uint64 {
+	var ans uint64
+	address := wallet.GetAddress()
+	for _, utxo := range ledger.utxoDb[address] {
+		ans += utxo.unusedTxOut.amount
 	}
 	return ans
 }
 
-func (wallet Wallet) MakeTransaction(ledger Ledger, receiverAddress Address, amount uint64, senderChangeAddress Address) (*Transaction, error) {
+func (wallet *Wallet) MakeCoinbaseTransaction(amount uint64) Transaction {
+	address := wallet.GetAddress()
+	txOut := TxOut{address: address, amount: amount}
+	txn := Transaction{txOuts: []TxOut{txOut}, txIns: []TxIn{}}
+	txn.txId = txn.ComputeTxId()
+	txn.witness = wallet.MakeWitness(txn.txId)
+	return txn
+}
+
+func (wallet *Wallet) MakeTransaction(ledger *Ledger, receiverAddress Address, amount uint64) (*Transaction, error) {
 	if amount == 0 {
 		return nil, fmt.Errorf("amount is zero")
 	}
 
+	senderAddress := wallet.GetAddress()
 	receiverTxOut := TxOut{address: receiverAddress, amount: amount}
 	ans := Transaction{
 		txOuts: []TxOut{receiverTxOut},
 		txIns:  []TxIn{}}
-	utxos := wallet.ComputeUtxos(ledger)
-	for i := range utxos {
-		utxo := &utxos[i]
-		priv := wallet[utxo.walletIdx]
-		witness := GetWitness(&priv)
-		signature, err := ecdsa.SignASN1(rand.Reader, &priv, utxo.uTxOut.address[:])
-		if err != nil {
-			panic(err)
-		}
-		txIn := TxIn{
-			uTxOutCursor: utxo.cursor,
-			witness:      witness,
-			signature:    signature}
-		ans.txIns = append(ans.txIns, txIn)
-		if amount >= utxo.uTxOut.amount {
-			amount -= utxo.uTxOut.amount
+
+	for _, utxo := range ledger.utxoDb[senderAddress] {
+		ans.txIns = append(ans.txIns, utxo.refTxIn)
+		if amount >= utxo.unusedTxOut.amount {
+			amount -= utxo.unusedTxOut.amount
 		} else {
-			change := utxo.uTxOut.amount - amount
-			ans.txOuts = append(ans.txOuts, TxOut{address: senderChangeAddress, amount: change})
+			change := utxo.unusedTxOut.amount - amount
+			ans.txOuts = append(ans.txOuts, TxOut{address: senderAddress, amount: change})
 			amount = 0
 		}
 	}
@@ -354,5 +389,6 @@ func (wallet Wallet) MakeTransaction(ledger Ledger, receiverAddress Address, amo
 	}
 
 	ans.txId = ans.ComputeTxId()
+	ans.witness = wallet.MakeWitness(ans.txId)
 	return &ans, nil
 }
