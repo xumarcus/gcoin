@@ -1,20 +1,20 @@
-package main
+package gcoin
 
 import (
 	"testing"
 )
 
 func TestValidate(t *testing.T) {
-	chain := NewChain([]int{0, 1, 2})
+	chain := MakeChainFromData([]int{0, 1, 2})
 	err := chain.Validate()
 	if err != nil {
 		t.Error(err)
 	}
 }
 
-func TestCumulativeDifficulty(t *testing.T) {
-	chain := NewChain([]int{0, 1, 2})
-	cd := chain.CumulativeDifficulty()
+func TestGetCumulativeDifficulty(t *testing.T) {
+	chain := MakeChainFromData([]int{0, 1, 2})
+	cd := chain.GetCumulativeDifficulty()
 	if cd != 3 {
 		t.Error(cd)
 	}
@@ -22,8 +22,7 @@ func TestCumulativeDifficulty(t *testing.T) {
 
 func TestGetAvailableFunds(t *testing.T) {
 	wallet := NewWallet()
-	address := wallet.GetAddress()
-	ledger := NewLedgerWithTransaction(NewCoinbaseTransaction(address, 1))
+	ledger := MakeLedgerFromTransaction(wallet.MakeCoinbaseTransaction(1))
 	amount := wallet.GetAvailableFunds(&ledger)
 	if amount != 1 {
 		t.Error(amount)
@@ -38,15 +37,16 @@ func TestMakeTransaction(t *testing.T) {
 	if address1 == address2 {
 		t.Errorf("same address")
 	}
-	ledger := NewLedgerWithTransaction(NewCoinbaseTransaction(address1, 3))
+	ledger := MakeLedgerFromTransaction(wallet1.MakeCoinbaseTransaction(3))
 	txn, err := wallet1.MakeTransaction(&ledger, address2, 2)
 	if err != nil {
 		panic(err)
 	}
 
-	// temp
-	chain := ledger.chain.AppendBlock([]Transaction{*txn})
-	ledger = Ledger{chain: chain}
+	// TODO
+	b := ledger.chain.NextBlock([]Transaction{*txn})
+	b.Mine()
+	ledger.chain = append(ledger.chain, b)
 	ledger.utxoDb = ledger.ComputeUtxoDb()
 	amount1 := wallet1.GetAvailableFunds(&ledger)
 	if amount1 != 1 {

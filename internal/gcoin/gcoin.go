@@ -1,16 +1,17 @@
-package main
+package gcoin
 
 import (
 	"bytes"
+	"cmp"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
-	"math"
 	"math/bits"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -21,42 +22,6 @@ type Validatable interface {
 // https://lhartikk.github.io/
 
 type Hash [32]byte
-
-type Block[T any] struct {
-	index        uint64
-	timestamp    int64
-	data         T
-	previousHash Hash
-	hash         Hash
-	difficulty   uint8
-	nonce        uint64
-}
-
-type Chain[T any] []Block[T]
-
-func (b *Block[T]) ComputeHash() Hash {
-	var buf bytes.Buffer
-	binary.Write(&buf, binary.BigEndian, b.index)
-	binary.Write(&buf, binary.BigEndian, b.timestamp)
-	binary.Write(&buf, binary.BigEndian, b.data)
-	binary.Write(&buf, binary.BigEndian, b.previousHash)
-	binary.Write(&buf, binary.BigEndian, b.difficulty)
-	binary.Write(&buf, binary.BigEndian, b.nonce)
-	return sha256.Sum256(buf.Bytes())
-}
-
-func NewBlock[T any](data T) Block[T] {
-	b := Block[T]{
-		index:        0,
-		timestamp:    time.Now().UnixMilli(),
-		data:         data,
-		previousHash: [32]byte{},
-		hash:         [32]byte{},
-		difficulty:   0,
-		nonce:        0}
-	b.hash = b.ComputeHash()
-	return b
-}
 
 func (hash *Hash) LeadingZeros() int {
 	ans := 0
@@ -69,74 +34,191 @@ func (hash *Hash) LeadingZeros() int {
 	return ans
 }
 
-func (chain Chain[T]) NextBlock(data T) Block[T] {
-	last := chain[len(chain)-1]
+type Block[T any] struct {
+	index     uint64
+	timestamp int64
+	data      T
+	prevHash  Hash
+	hash      Hash
+	exp       uint8
+	cd        uint64
+	nonce     uint64
+}
+
+func NewBlock[T any](data T) Block[T] {
 	b := Block[T]{
-		index:        last.index + 1,
-		timestamp:    time.Now().UnixMilli(),
-		data:         data,
-		previousHash: last.hash,
-		hash:         [32]byte{},
-		difficulty:   0,
-		nonce:        0}
-	b.difficulty = chain.BlockDifficulty(&b)
+		index:     0,
+		timestamp: time.Now().UnixMilli(),
+		data:      data,
+		prevHash:  [32]byte{},
+		hash:      [32]byte{},
+		exp:       0,
+		cd:        1,
+		nonce:     0}
+	b.hash = b.ComputeHash()
+	return b
+}
+
+func (b *Block[T]) ComputeHash() Hash {
+	var buf bytes.Buffer
+	binary.Write(&buf, binary.BigEndian, b.index)
+	binary.Write(&buf, binary.BigEndian, b.timestamp)
+	binary.Write(&buf, binary.BigEndian, b.data)
+	binary.Write(&buf, binary.BigEndian, b.prevHash)
+	binary.Write(&buf, binary.BigEndian, b.exp)
+	binary.Write(&buf, binary.BigEndian, b.cd)
+	binary.Write(&buf, binary.BigEndian, b.nonce)
+	return sha256.Sum256(buf.Bytes())
+}
+
+func (b *Block[T]) Equal(other *Block[T]) bool {
+	return b.hash == other.hash
+}
+
+func (b *Block[T]) Mine() {
 	for {
 		b.hash = b.ComputeHash()
-		if uint8(b.hash.LeadingZeros()) < b.difficulty {
+		if uint8(b.hash.LeadingZeros()) < b.exp {
 			b.nonce++
 		} else {
-			return b
+			return
 		}
 	}
 }
 
-func (chain Chain[T]) AppendBlock(data T) Chain[T] {
-	return append(chain, chain.NextBlock(data))
+func (b *Block[T]) Validate() error {
+	if b.ComputeHash() != b.hash {
+		return fmt.Errorf("hash does not match block")
+	}
+	return nil
 }
 
-func NewChain[T any](datas []T) Chain[T] {
-	n := len(datas)
-	chain := make([]Block[T], n)
-	chain[0] = NewBlock(datas[0])
-	for i := 1; i < n; i++ {
-		chain[i] = Chain[T](chain[:i]).NextBlock(datas[i])
+type Chain[T any] []Block[T]
+
+func (chain Chain[T]) String() string {
+	var builder strings.Builder
+	for i, b := range chain {
+		builder.WriteString(fmt.Sprintf("%02d:%#v(%d) ", i, b.data, b.exp))
+	}
+	builder.WriteString(fmt.Sprintf("[%d]", chain.GetCumulativeDifficulty()))
+	return builder.String()
+}
+
+func (chain Chain[T]) NextBlock(data T) Block[T] {
+	n := len(chain)
+	if n == 0 {
+		return NewBlock(data)
+	}
+	prev := chain[n-1]
+	b := Block[T]{
+		index:     uint64(n),
+		timestamp: time.Now().UnixMilli(),
+		data:      data,
+		prevHash:  prev.hash,
+		hash:      [32]byte{},
+		nonce:     0}
+	b.exp = chain.BlockExp(&b)
+	b.cd = prev.cd + (1 << b.exp)
+	return b
+}
+
+func MakeChainFromData[T any](datas []T) Chain[T] {
+	var chain Chain[T]
+	for _, data := range datas {
+		b := chain.NextBlock(data)
+		b.Mine()
+		chain = append(chain, b)
 	}
 	return chain
 }
 
-func (chain Chain[T]) BlockDifficulty(b *Block[T]) uint8 {
+func MakeChainFromBlocks[T any](blocks []Block[T]) (Chain[T], error) {
+	n := len(blocks)
+	if n == 0 {
+		return nil, fmt.Errorf("blocks are empty")
+	}
+
+	m := make(map[Hash]Block[T])
+	for _, b := range blocks {
+		m[b.hash] = b
+	}
+
+	slices.SortStableFunc(blocks, func(a, b Block[T]) int {
+		return cmp.Compare(a.cd, b.cd)
+	})
+
+	for i := n - 1; i != -1; i-- {
+		b := blocks[i]
+		chain, err := MakeChainWithMapFromCur(m, b)
+		if err == nil {
+			return chain, nil
+		}
+	}
+
+	return nil, fmt.Errorf("no valid chain found")
+}
+
+func MakeChainWithMapFromCur[T any](m map[Hash]Block[T], cur Block[T]) (Chain[T], error) {
+	var buf []Block[T]
+	for {
+		buf = append(buf, cur)
+		if cur.index == 0 {
+			break
+		}
+		prev, ok := m[cur.prevHash]
+		if !ok {
+			return nil, fmt.Errorf("no prev found among blocks for %#v", cur)
+		}
+		cur = prev
+	}
+	slices.Reverse(buf)
+	return Chain[T](buf), nil
+}
+
+func (chain Chain[T]) BlockExp(b *Block[T]) uint8 {
 	const NUM_MILLISECONDS_PER_BLOCK_GENERATED = 200
 	const NUM_BLOCKS_BETWEEN_DIFFICULTY_ADJUSTMENT = 4
 	const TIME_EXPECTED = NUM_MILLISECONDS_PER_BLOCK_GENERATED * NUM_BLOCKS_BETWEEN_DIFFICULTY_ADJUSTMENT
 
 	last := chain[len(chain)-1]
 	if b.index%NUM_BLOCKS_BETWEEN_DIFFICULTY_ADJUSTMENT != 0 {
-		return last.difficulty
+		return last.exp
 	}
 
 	// expect b.index != 0
 	timeTaken := b.timestamp - chain[b.index-NUM_BLOCKS_BETWEEN_DIFFICULTY_ADJUSTMENT].timestamp
 	if timeTaken > TIME_EXPECTED*2 {
-		if last.difficulty > 0 {
-			return last.difficulty - 1
+		if last.exp > 0 {
+			return last.exp - 1
 		} else {
 			return 0
 		}
 	} else if timeTaken < TIME_EXPECTED/2 {
-		return last.difficulty + 1
+		return last.exp + 1
 	} else {
-		return last.difficulty
+		return last.exp
 	}
 }
 
 func (chain Chain[T]) Validate() error {
+	var cd uint64
 	for i := range chain {
 		b := &chain[i]
+		if err := b.Validate(); err != nil {
+			return err
+		}
+
 		if uint64(i) != b.index {
 			return fmt.Errorf("index mismatch")
 		}
+
+		cd += uint64(1 << b.exp)
+		if cd != b.cd {
+			return fmt.Errorf("cumulative difficulty mismatch")
+		}
+
 		if i != 0 {
-			if chain[i-1].hash != b.previousHash {
+			if chain[i-1].hash != b.prevHash {
 				return fmt.Errorf("previousHash does not match prev")
 			}
 			if chain[i-1].timestamp-60 >= b.timestamp {
@@ -146,24 +228,19 @@ func (chain Chain[T]) Validate() error {
 				return fmt.Errorf("time travel to the future")
 			}
 		}
-		if b.ComputeHash() != b.hash {
-			return fmt.Errorf("hash does not match block")
-		}
 	}
 	return nil
 }
 
-func (chain Chain[T]) CumulativeDifficulty() int {
-	ans := 0
-	for i := range chain {
-		b := &chain[i]
-		ans += 1 << b.difficulty
+func (chain Chain[T]) GetCumulativeDifficulty() uint64 {
+	if chain == nil {
+		return 0
 	}
-	return ans
+	return chain[len(chain)-1].cd
 }
 
 func (chain Chain[T]) Less(other Chain[T]) bool {
-	return chain.CumulativeDifficulty() < other.CumulativeDifficulty()
+	return chain.GetCumulativeDifficulty() < other.GetCumulativeDifficulty()
 }
 
 type Address [32]byte
@@ -194,6 +271,10 @@ type Transaction struct {
 	txOuts  []TxOut
 	txIns   []TxIn
 	witness Witness
+}
+
+func (txn *Transaction) Equal(other *Transaction) bool {
+	return txn.txId == other.txId
 }
 
 func (txn *Transaction) Validate() error {
@@ -242,9 +323,23 @@ type UTXO struct {
 
 // Note: nodes can discard transactions in chain after verification (pruning)
 type Ledger struct {
-	chain   Chain[[]Transaction] // SSoT, keep track of timestamps
-	utxoDb  map[Address][]UTXO   // full, complete UTXO set
-	mempool []Transaction        // unconfirmed transactions
+	chain  Chain[[]Transaction] // SSoT, keep track of timestamps
+	utxoDb map[Address][]UTXO   // full, complete UTXO set
+}
+
+func MakeLedgerFromTransaction(txn Transaction) Ledger {
+	chain := MakeChainFromData([][]Transaction{{txn}})
+	return MakeLedgerFromChain(chain)
+}
+
+func MakeLedgerFromChain(chain Chain[[]Transaction]) Ledger {
+	ledger := Ledger{chain: chain}
+	ledger.utxoDb = ledger.ComputeUtxoDb()
+	return ledger
+}
+
+func (ledger *Ledger) GetChain() Chain[[]Transaction] {
+	return ledger.chain
 }
 
 func (ledger *Ledger) Validate() error {
@@ -279,15 +374,7 @@ func (ledger *Ledger) ComputeUtxoDb() map[Address][]UTXO {
 	return utxoDb
 }
 
-func NewLedgerWithTransaction(txn Transaction) Ledger {
-	data := []Transaction{txn}
-	chain := NewChain([][]Transaction{data})
-	ledger := Ledger{chain: chain}
-	ledger.utxoDb = ledger.ComputeUtxoDb()
-	return ledger
-}
-
-func (uncommitted *Transaction) TransactionFee(ledger *Ledger) (uint64, error) {
+func (ledger *Ledger) ValidateAndComputeTransactionFee(uncommitted *Transaction) (uint64, error) {
 	var ans uint64
 	address := uncommitted.witness.GetAddress()
 	utxos := ledger.utxoDb[address]
@@ -298,14 +385,14 @@ func (uncommitted *Transaction) TransactionFee(ledger *Ledger) (uint64, error) {
 		if idx != -1 {
 			ans += utxos[idx].unusedTxOut.amount
 		} else {
-			return math.MaxUint64, fmt.Errorf("txIn %#v invalid", txIn)
+			return 0, fmt.Errorf("txIn %#v invalid", txIn)
 		}
 	}
 	for _, txOut := range uncommitted.txOuts {
 		if ans >= txOut.amount {
 			ans -= txOut.amount
 		} else {
-			return math.MaxUint64, fmt.Errorf("remaining fee=%d < amount=%d", ans, txOut.amount)
+			return 0, fmt.Errorf("balance(%d) < amount(%d) for %#v", ans, txOut.amount, txOut)
 		}
 	}
 	return ans, nil

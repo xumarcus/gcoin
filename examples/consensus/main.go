@@ -2,26 +2,27 @@ package main
 
 import (
 	"fmt"
+	"gcoin/internal/gcoin"
 	"sync"
 	"time"
 )
 
 type Node[T any] struct {
-	chain Chain[T]
-	send  chan Chain[T]
-	recv  chan Chain[T]
+	chain gcoin.Chain[T]
+	send  chan gcoin.Chain[T]
+	recv  chan gcoin.Chain[T]
 	data  []T
 }
 
 func main() {
-	genesis := NewBlock(0)
+	genesis := gcoin.NewBlock(0)
 	m := 20
 	n := 6
 
 	// Ring network
 	nodes := make([]Node[int], n)
 	for i := 0; i < n; i++ {
-		var recv chan Chain[int]
+		var recv chan gcoin.Chain[int]
 		if i != 0 {
 			recv = nodes[i-1].send
 		}
@@ -30,8 +31,8 @@ func main() {
 			data[j] = i + j*n
 		}
 		nodes[i] = Node[int]{
-			chain: Chain[int]{genesis},
-			send:  make(chan Chain[int], m*m),
+			chain: gcoin.Chain[int]{genesis},
+			send:  make(chan gcoin.Chain[int], m*m),
 			recv:  recv,
 			data:  data}
 	}
@@ -62,6 +63,7 @@ func main() {
 				}
 
 				b := node.chain.NextBlock(d)
+				b.Mine()
 
 				// simulate faulty node
 				if i == 0 {
@@ -90,13 +92,7 @@ func main() {
 	}
 	wg.Wait()
 
-	for i := range nodes {
-		node := &nodes[i]
-		for j := range node.chain {
-			b := &node.chain[j]
-			fmt.Printf("%d(%d) ", b.data, b.difficulty)
-		}
-		fmt.Printf("[%d]\n", node.chain.CumulativeDifficulty())
-		fmt.Println("---")
+	for _, node := range nodes {
+		fmt.Printf("---\n%s\n", node.chain)
 	}
 }
