@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"math/bits"
 	"slices"
@@ -59,6 +60,10 @@ func NewBlock[T any](data T) Block[T] {
 	return b
 }
 
+func (b Block[T]) Equal(other Block[T]) bool {
+	return b.hash == other.hash
+}
+
 func (b *Block[T]) ComputeHash() Hash {
 	var buf bytes.Buffer
 	binary.Write(&buf, binary.BigEndian, b.index)
@@ -69,10 +74,6 @@ func (b *Block[T]) ComputeHash() Hash {
 	binary.Write(&buf, binary.BigEndian, b.cd)
 	binary.Write(&buf, binary.BigEndian, b.nonce)
 	return sha256.Sum256(buf.Bytes())
-}
-
-func (b *Block[T]) Equal(other *Block[T]) bool {
-	return b.hash == other.hash
 }
 
 func (b *Block[T]) Mine() {
@@ -97,10 +98,10 @@ type Chain[T any] []Block[T]
 
 func (chain Chain[T]) String() string {
 	var builder strings.Builder
+	builder.WriteString(fmt.Sprintf("cd: %d\n", chain.GetCumulativeDifficulty()))
 	for i, b := range chain {
-		builder.WriteString(fmt.Sprintf("%02d:%#v(%d) ", i, b.data, b.exp))
+		builder.WriteString(fmt.Sprintf("%d:(exp=%d) %v\n", i, b.exp, b.data))
 	}
-	builder.WriteString(fmt.Sprintf("[%d]", chain.GetCumulativeDifficulty()))
 	return builder.String()
 }
 
@@ -273,7 +274,18 @@ type Transaction struct {
 	witness Witness
 }
 
-func (txn *Transaction) Equal(other *Transaction) bool {
+func (txn Transaction) String() string {
+	var builder strings.Builder
+	senderAddress := txn.witness.GetAddress()
+	builder.WriteString(fmt.Sprintf("sender: %s;\n{\n", hex.EncodeToString(senderAddress[:])))
+	for i, txOut := range txn.txOuts {
+		builder.WriteString(fmt.Sprintf("\t%d: $%d->%s\n", i, txOut.amount, hex.EncodeToString(txOut.address[:])))
+	}
+	builder.WriteString("}\n")
+	return builder.String()
+}
+
+func (txn Transaction) Equal(other Transaction) bool {
 	return txn.txId == other.txId
 }
 
@@ -449,9 +461,9 @@ func (wallet *Wallet) MakeCoinbaseTransaction(amount uint64) Transaction {
 	return txn
 }
 
-func (wallet *Wallet) MakeTransaction(ledger *Ledger, receiverAddress Address, amount uint64) (*Transaction, error) {
+func (wallet *Wallet) MakeTransaction(ledger *Ledger, receiverAddress Address, amount uint64) (Transaction, error) {
 	if amount == 0 {
-		return nil, fmt.Errorf("amount is zero")
+		return Transaction{}, fmt.Errorf("amount is zero")
 	}
 
 	senderAddress := wallet.GetAddress()
@@ -472,10 +484,10 @@ func (wallet *Wallet) MakeTransaction(ledger *Ledger, receiverAddress Address, a
 	}
 
 	if amount > 0 {
-		return nil, fmt.Errorf("insufficient funds")
+		return Transaction{}, fmt.Errorf("insufficient funds")
 	}
 
 	ans.txId = ans.ComputeTxId()
 	ans.witness = wallet.MakeWitness(ans.txId)
-	return &ans, nil
+	return ans, nil
 }
