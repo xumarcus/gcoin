@@ -24,7 +24,7 @@ func RebuildChain[T any](m map[util.Hash]Block[T], cur Block[T]) (Chain[T], erro
 	var buf []Block[T]
 	for {
 		buf = append(buf, cur)
-		if cur.index == 0 {
+		if cur.Index == 0 {
 			break
 		}
 		prev, ok := m[cur.prevHash]
@@ -39,7 +39,7 @@ func RebuildChain[T any](m map[util.Hash]Block[T], cur Block[T]) (Chain[T], erro
 
 func (chain Chain[T]) String() string {
 	var builder strings.Builder
-	builder.WriteString(fmt.Sprintf("cd: %d\n", chain.GetCumulativeDifficulty()))
+	builder.WriteString(fmt.Sprintf("cd=%d len=%d\n", chain.GetCumulativeDifficulty(), len(chain)))
 	for _, b := range chain {
 		builder.WriteString(fmt.Sprintf("%s\n", b))
 	}
@@ -52,14 +52,14 @@ func (chain Chain[T]) NextUnmintedBlock(data T) Block[T] {
 		return NewBlock(data)
 	}
 	b := Block[T]{
-		index:     uint64(last.index + 1),
-		timestamp: time.Now().UnixMilli(),
+		Index:     uint64(last.Index + 1),
+		Timestamp: time.Now().UnixMilli(),
 		Data:      data,
-		prevHash:  last.Hash,
-		Hash:      util.Hash{},
-		nonce:     0}
-	b.exp = chain.BlockExp(&b)
-	b.Cd = last.Cd + (1 << b.exp)
+		prevHash:  last.hash,
+		hash:      util.Hash{},
+		Nonce:     0}
+	b.Exp = chain.BlockExp(&b)
+	b.CmDf = last.CmDf + (1 << b.Exp)
 	return b
 }
 
@@ -70,7 +70,7 @@ func (chain Chain[T]) Append(b Block[T]) (Chain[T], error) {
 
 	last := util.Last(chain)
 	if last == nil {
-		if b.index != 0 {
+		if b.Index != 0 {
 			return nil, fmt.Errorf("index mismatch")
 		}
 		return Chain[T]{b}, nil
@@ -84,22 +84,22 @@ func (chain Chain[T]) Append(b Block[T]) (Chain[T], error) {
 
 func (chain Chain[T]) BlockExp(b *Block[T]) uint8 {
 	last := util.Last(chain)
-	if b.index%NUM_BLOCKS_BETWEEN_DIFFICULTY_ADJUSTMENT != 0 {
-		return last.exp
+	if b.Index%NUM_BLOCKS_BETWEEN_DIFFICULTY_ADJUSTMENT != 0 {
+		return last.Exp
 	}
 
 	// expect b.index != 0
-	timeTaken := b.timestamp - chain[b.index-NUM_BLOCKS_BETWEEN_DIFFICULTY_ADJUSTMENT].timestamp
+	timeTaken := b.Timestamp - chain[b.Index-NUM_BLOCKS_BETWEEN_DIFFICULTY_ADJUSTMENT].Timestamp
 	if timeTaken > TIME_EXPECTED*2 {
-		if last.exp > 0 {
-			return last.exp - 1
+		if last.Exp > 0 {
+			return last.Exp - 1
 		} else {
 			return 0
 		}
 	} else if timeTaken < TIME_EXPECTED/2 {
-		return last.exp + 1
+		return last.Exp + 1
 	} else {
-		return last.exp
+		return last.Exp
 	}
 }
 
@@ -123,7 +123,7 @@ func (chain Chain[T]) GetCumulativeDifficulty() uint64 {
 	if last == nil {
 		return 0
 	}
-	return last.Cd
+	return last.CmDf
 }
 
 func (chain Chain[T]) Less(other Chain[T]) bool {

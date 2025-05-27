@@ -13,25 +13,26 @@ type UtxoDb struct {
 
 // Assume checked with ValidateRegularTransaction
 func (utxoDb *UtxoDb) UpdateTransaction(txn Transaction) {
-	for _, txIn := range txn.TxIns() {
+	for _, txIn := range txn.GetTxIns() {
 		txOut := utxoDb.uTxOuts[txIn]
-		if utxoDb.uTxIns[txOut.address] != nil {
-			utxoDb.uTxIns[txOut.address].Remove(txIn)
+		if utxoDb.uTxIns[txOut.Address] != nil {
+			utxoDb.uTxIns[txOut.Address].Remove(txIn)
 		}
+		delete(utxoDb.uTxOuts, txIn)
 	}
-	for i, txOut := range txn.TxOuts() {
-		txIn := TxIn{txId: txn.TxId(), outIdx: uint64(i)}
-		if utxoDb.uTxIns[txOut.address] == nil {
-			utxoDb.uTxIns[txOut.address] = mapset.NewThreadUnsafeSet[TxIn]()
+	for i, txOut := range txn.GetTxOuts() {
+		txIn := TxIn{TxId: txn.GetTxId(), OutIdx: uint64(i)}
+		if utxoDb.uTxIns[txOut.Address] == nil {
+			utxoDb.uTxIns[txOut.Address] = mapset.NewThreadUnsafeSet[TxIn]()
 		}
-		utxoDb.uTxIns[txOut.address].Add(txIn)
+		utxoDb.uTxIns[txOut.Address].Add(txIn)
 		utxoDb.uTxOuts[txIn] = txOut
 	}
 }
 
 func (utxoDb *UtxoDb) UpdateFromBlockTransactions(bt *BlockTransactions) {
-	utxoDb.UpdateTransaction(&bt.cTxn)
-	for _, txn := range bt.rTxns {
+	utxoDb.UpdateTransaction(&bt.CTxn)
+	for _, txn := range bt.RTxns {
 		utxoDb.UpdateTransaction(&txn)
 	}
 }
@@ -39,21 +40,21 @@ func (utxoDb *UtxoDb) UpdateFromBlockTransactions(bt *BlockTransactions) {
 func (utxoDb *UtxoDb) ValidateRegularTransaction(txn *RegularTransaction) error {
 	var transactionFee uint64
 	address := txn.witness.GetAddress()
-	for _, txIn := range txn.txIns {
+	for _, txIn := range txn.TxIns {
 		txOut, ok := utxoDb.uTxOuts[txIn]
-		if address != txOut.address {
+		if address != txOut.Address {
 			return fmt.Errorf("address mismatch")
 		}
 		if !ok {
 			return fmt.Errorf("txIn %v invalid", txIn)
 		}
-		transactionFee += txOut.amount
+		transactionFee += txOut.Amount
 	}
-	for _, txOut := range txn.txOuts {
-		if transactionFee >= txOut.amount {
-			transactionFee -= txOut.amount
+	for _, txOut := range txn.TxOuts {
+		if transactionFee >= txOut.Amount {
+			transactionFee -= txOut.Amount
 		} else {
-			return fmt.Errorf("balance(%d) < amount(%d) for %v", transactionFee, txOut.amount, txOut)
+			return fmt.Errorf("balance(%d) < amount(%d) for %v", transactionFee, txOut.Amount, txOut)
 		}
 	}
 	if transactionFee != txn.transactionFee {
@@ -67,7 +68,7 @@ func (utxoDb *UtxoDb) AvailableFunds(address Address) uint64 {
 		var funds uint64
 		for txIn := range uTxIns.Iter() {
 			if txOut, ok := utxoDb.uTxOuts[txIn]; ok {
-				funds += txOut.amount
+				funds += txOut.Amount
 			} else {
 				panic(fmt.Errorf("txIn %v not found", txIn))
 			}
@@ -87,8 +88,8 @@ func NewUtxoDb() UtxoDb {
 func NewUtxoDbFromChain(chain Chain) UtxoDb {
 	utxoDb := NewUtxoDb()
 	for _, b := range chain {
-		utxoDb.UpdateTransaction(&b.Data.cTxn)
-		for _, txn := range b.Data.rTxns {
+		utxoDb.UpdateTransaction(&b.Data.CTxn)
+		for _, txn := range b.Data.RTxns {
 			utxoDb.UpdateTransaction(&txn)
 		}
 	}

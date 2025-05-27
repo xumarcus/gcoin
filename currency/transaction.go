@@ -3,28 +3,21 @@ package currency
 import (
 	"bytes"
 	"crypto/sha256"
-	"encoding/binary"
+	"encoding/gob"
 )
 
 type Transaction interface {
-	TxId() TxId
-	TxIns() []TxIn
-	TxOuts() []TxOut
+	GetTxId() TxId // For checking Equal
+	GetTxIns() []TxIn
+	GetTxOuts() []TxOut
+	GetTimestamp() int64 // Transaction is Timestamped
 }
 
 func ComputeTxId(txn Transaction) TxId {
 	var buf bytes.Buffer
-	for _, txOut := range txn.TxOuts() {
-		binary.Write(&buf, binary.BigEndian, txOut.address)
-		binary.Write(&buf, binary.BigEndian, txOut.amount)
-	}
-	for _, txIn := range txn.TxIns() {
-		binary.Write(&buf, binary.BigEndian, txIn.txId)
-		binary.Write(&buf, binary.BigEndian, txIn.outIdx)
+	enc := gob.NewEncoder(&buf)
+	if err := enc.Encode(txn); err != nil {
+		panic(err)
 	}
 	return sha256.Sum256(buf.Bytes())
-}
-
-func IsEqual(a Transaction, b Transaction) bool {
-	return a.TxId() == b.TxId()
 }

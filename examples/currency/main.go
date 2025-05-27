@@ -76,6 +76,7 @@ func (node *Node) prepareNextUnmintedBlock() c.Block {
 
 func (node *Node) Mine() {
 	b := node.prepareNextUnmintedBlock()
+	<-time.After(50 * time.Millisecond) // unique coinbase txns
 	b.Mine()
 	select {
 	case node.rMined <- b:
@@ -89,16 +90,17 @@ func (node *Node) handleBlock(b c.Block) error {
 		panic(err)
 	}
 
-	_, ok := node.blocks[b.Hash]
+	hash := b.GetHash()
+	_, ok := node.blocks[hash]
 	if ok {
 		return fmt.Errorf("duplicate found")
 	}
-	node.blocks[b.Hash] = b
+	node.blocks[hash] = b
 
 	node.mu.Lock()
 	defer node.mu.Unlock()
 
-	if b.Cd <= node.protected.chain.GetCumulativeDifficulty() {
+	if b.CmDf <= node.protected.chain.GetCumulativeDifficulty() {
 		return nil
 	}
 
@@ -117,10 +119,10 @@ func (node *Node) handleTransaction(txn c.RegularTransaction) error {
 		panic(err)
 	}
 
-	if node.txIds.Contains(txn.TxId()) {
+	if node.txIds.Contains(txn.GetTxId()) {
 		return fmt.Errorf("duplicate found")
 	}
-	node.txIds.Add(txn.TxId())
+	node.txIds.Add(txn.GetTxId())
 
 	node.mu.Lock()
 	defer node.mu.Unlock()
@@ -177,7 +179,7 @@ func (node *Node) makeSimulatedTransaction(nodes []Node) (*c.RegularTransaction,
 	recvNode := &nodes[node.rd.IntN(2*N)]
 	amount := 1 + node.rd.Uint64N(MAX_AMOUNT)
 
-	return node.wallet.MakeRegularTransaction(&node.protected.utxoDb, recvNode.wallet.GetAddress(), amount)
+	return node.wallet.MakeRegularTransaction(&node.protected.utxoDb, recvNode.wallet.GetAddress(), amount, 1)
 }
 
 func (node *Node) Sim(nodes []Node) {
@@ -242,7 +244,7 @@ func main() {
 	}
 
 	// Mesh interconnect
-	for i := 0; i < N; i++ {
+	for i := range N {
 		a := &nodes[i]
 		b := &nodes[i+N]
 		for j := 0; j < N; j++ {
@@ -292,12 +294,14 @@ func main() {
 
 	for i := range nodes {
 		node := &nodes[i]
+		chain := node.protected.chain[:70]
+		utxoDb := c.NewUtxoDbFromChain(chain)
 
 		fmt.Println("---")
 		for j := range nodes {
 			x := &nodes[j]
 			address := x.wallet.GetAddress()
-			funds := node.protected.utxoDb.AvailableFunds(address)
+			funds := utxoDb.AvailableFunds(address)
 			fmt.Printf("%s: $%d\n", address, funds)
 		}
 	}

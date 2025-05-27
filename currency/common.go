@@ -25,21 +25,21 @@ type Address = util.Hash
 type TxId = util.Hash
 
 type TxOut struct {
-	address Address
-	amount  uint64
+	Address Address
+	Amount  uint64
 }
 
 func (txOut TxOut) String() string {
-	return fmt.Sprintf("$%d->%s", txOut.amount, txOut.address)
+	return fmt.Sprintf("$%d->%s", txOut.Amount, txOut.Address)
 }
 
 type TxIn struct {
-	txId   TxId
-	outIdx uint64
+	TxId   TxId
+	OutIdx uint64
 }
 
 func (txIn TxIn) String() string {
-	return fmt.Sprintf("%s[%d]", txIn.txId, txIn.outIdx)
+	return fmt.Sprintf("%s[%d]", txIn.TxId, txIn.OutIdx)
 }
 
 type Witness struct {

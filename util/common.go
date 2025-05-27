@@ -8,6 +8,10 @@ func Last[E any](s []E) *E {
 	return &s[n-1]
 }
 
-type Validatable interface {
+type Validated interface {
 	Validate() error
+}
+
+type Timestamped interface {
+	Timestamp() int64
 }

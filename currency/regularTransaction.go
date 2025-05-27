@@ -9,21 +9,26 @@ import (
 type RegularTransaction struct {
 	transactionFee uint64
 	txId           TxId
-	txIns          []TxIn
-	txOuts         []TxOut
+	TxIns          []TxIn
+	TxOuts         []TxOut
+	Timestamp      int64
 	witness        Witness
 }
 
-func (txn *RegularTransaction) TxId() TxId {
+func (txn *RegularTransaction) GetTxId() TxId {
 	return txn.txId
 }
 
-func (txn *RegularTransaction) TxIns() []TxIn {
-	return txn.txIns
+func (txn *RegularTransaction) GetTxIns() []TxIn {
+	return txn.TxIns
 }
 
-func (txn *RegularTransaction) TxOuts() []TxOut {
-	return txn.txOuts
+func (txn *RegularTransaction) GetTxOuts() []TxOut {
+	return txn.TxOuts
+}
+
+func (txn *RegularTransaction) GetTimestamp() int64 {
+	return txn.Timestamp
 }
 
 func (txn *RegularTransaction) Validate() error {
@@ -42,15 +47,17 @@ func (txn *RegularTransaction) Validate() error {
 
 func (txn RegularTransaction) String() string {
 	var builder strings.Builder
+	builder.WriteString(fmt.Sprintf("[%s]\n", txn.txId))
+
 	builder.WriteString(fmt.Sprintf("sender: %s\n", txn.witness.GetAddress()))
 
 	builder.WriteString("txIns:\n")
-	for i, txIn := range txn.txIns {
+	for i, txIn := range txn.TxIns {
 		builder.WriteString(fmt.Sprintf("%d: %s\n", i, txIn))
 	}
 
 	builder.WriteString("txOuts:\n")
-	for i, txOut := range txn.txOuts {
+	for i, txOut := range txn.TxOuts {
 		builder.WriteString(fmt.Sprintf("%d: %s\n", i, txOut))
 	}
 

@@ -3,20 +3,25 @@ package currency
 import "fmt"
 
 type CoinbaseTransaction struct {
-	txId  TxId
-	txOut TxOut
+	txId      TxId
+	TxOut     TxOut
+	Timestamp int64
 }
 
-func (txn *CoinbaseTransaction) TxId() TxId {
+func (txn *CoinbaseTransaction) GetTxId() TxId {
 	return txn.txId
 }
 
-func (txn *CoinbaseTransaction) TxIns() []TxIn {
+func (txn *CoinbaseTransaction) GetTxIns() []TxIn {
 	return nil
 }
 
-func (txn *CoinbaseTransaction) TxOuts() []TxOut {
-	return []TxOut{txn.txOut}
+func (txn *CoinbaseTransaction) GetTxOuts() []TxOut {
+	return []TxOut{txn.TxOut}
+}
+
+func (txn *CoinbaseTransaction) GetTimestamp() int64 {
+	return txn.Timestamp
 }
 
 func (txn *CoinbaseTransaction) Validate() error {
@@ -28,5 +33,5 @@ func (txn *CoinbaseTransaction) Validate() error {
 }
 
 func (txn CoinbaseTransaction) String() string {
-	return fmt.Sprintf("[%s] %s", txn.txId, txn.txOut)
+	return fmt.Sprintf("(t=%d) [%s]\n%s\n", txn.Timestamp, txn.txId, txn.TxOut)
 }

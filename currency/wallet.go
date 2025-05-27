@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"fmt"
+	"time"
 )
 
 /*
@@ -41,39 +42,46 @@ func (wallet *Wallet) MakeWitness(txId TxId) Witness {
 		pub: wallet.GetPub()}
 }
 
-func (wallet *Wallet) MakeRegularTransaction(utxoDb *UtxoDb, recvAddress Address, amount uint64) (*RegularTransaction, error) {
+func (wallet *Wallet) approveTransaction(txn *RegularTransaction, transactionFee uint64) {
+	txn.transactionFee = transactionFee
+	txn.Timestamp = time.Now().UnixMilli()
+	txn.txId = ComputeTxId(txn)
+	txn.witness = wallet.MakeWitness(txn.txId)
+}
+
+func (wallet *Wallet) fundTransaction(utxoDb *UtxoDb, txn *RegularTransaction, amount uint64) (uint64, error) {
+	address := wallet.GetAddress()
+	for txIn := range utxoDb.uTxIns[address].Iter() {
+		txn.TxIns = append(txn.TxIns, txIn)
+		txOut, ok := utxoDb.uTxOuts[txIn]
+		if !ok {
+			return 0, fmt.Errorf("txIn %v invalid", txIn)
+		}
+		if amount > txOut.Amount {
+			amount -= txOut.Amount
+		} else {
+			return txOut.Amount - amount, nil
+		}
+	}
+	if amount != 0 {
+		return 0, fmt.Errorf("%s not enough funds", address)
+	}
+	return 0, nil
+}
+
+func (wallet *Wallet) MakeRegularTransaction(utxoDb *UtxoDb, recvAddress Address, amount uint64, transactionFee uint64) (*RegularTransaction, error) {
 	if amount == 0 {
 		return nil, fmt.Errorf("nothing to send")
 	}
-
-	sendAddress := wallet.GetAddress()
 	txn := RegularTransaction{
-		txOuts: []TxOut{{address: recvAddress, amount: amount}}}
-
-	for txIn := range utxoDb.uTxIns[sendAddress].Iter() {
-		txn.txIns = append(txn.txIns, txIn)
-		txOut, ok := utxoDb.uTxOuts[txIn]
-		if !ok {
-			return nil, fmt.Errorf("txIn %v invalid", txIn)
+		TxOuts: []TxOut{{Address: recvAddress, Amount: amount}}}
+	if change, err := wallet.fundTransaction(utxoDb, &txn, amount+transactionFee); err != nil {
+		return nil, err
+	} else {
+		if change != 0 {
+			txn.TxOuts = append(txn.TxOuts, TxOut{Address: wallet.GetAddress(), Amount: change})
 		}
-
-		if amount > txOut.amount {
-			amount -= txOut.amount
-		} else {
-			change := txOut.amount - amount
-			if change != 0 {
-				txn.txOuts = append(txn.txOuts, TxOut{address: sendAddress, amount: change})
-			}
-			amount = 0
-			break
-		}
+		wallet.approveTransaction(&txn, transactionFee)
+		return &txn, nil
 	}
-
-	if amount != 0 {
-		return nil, fmt.Errorf("%s not enough funds", sendAddress)
-	}
-
-	txn.txId = ComputeTxId(&txn)
-	txn.witness = wallet.MakeWitness(txn.txId)
-	return &txn, nil
 }

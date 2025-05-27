@@ -3,11 +3,12 @@ package currency
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 type BlockTransactions struct {
-	cTxn  CoinbaseTransaction
-	rTxns []RegularTransaction
+	CTxn  CoinbaseTransaction
+	RTxns []RegularTransaction
 }
 
 func transactionFees(txns []RegularTransaction) uint64 {
@@ -20,23 +21,23 @@ func transactionFees(txns []RegularTransaction) uint64 {
 
 func NewBlockTransactions(txns []RegularTransaction, address Address) BlockTransactions {
 	fees := transactionFees(txns)
-	txOut := TxOut{address: address, amount: DEFAULT_COINBASE_AMOUNT + fees}
-	cTxn := CoinbaseTransaction{txOut: txOut}
+	txOut := TxOut{Address: address, Amount: DEFAULT_COINBASE_AMOUNT + fees}
+	cTxn := CoinbaseTransaction{TxOut: txOut, Timestamp: time.Now().UnixMilli()}
 	cTxn.txId = ComputeTxId(&cTxn)
-	return BlockTransactions{cTxn: cTxn, rTxns: txns}
+	return BlockTransactions{CTxn: cTxn, RTxns: txns}
 }
 
 func (bt *BlockTransactions) Validate() error {
-	if err := bt.cTxn.Validate(); err != nil {
+	if err := bt.CTxn.Validate(); err != nil {
 		return fmt.Errorf("coinbase: %w", err)
 	}
-	for i, txn := range bt.rTxns {
+	for i, txn := range bt.RTxns {
 		if err := txn.Validate(); err != nil {
 			return fmt.Errorf("%d: %s", i, &txn)
 		}
 	}
-	fees := transactionFees(bt.rTxns)
-	if bt.cTxn.txOut.amount != DEFAULT_COINBASE_AMOUNT+fees {
+	fees := transactionFees(bt.RTxns)
+	if bt.CTxn.TxOut.Amount != DEFAULT_COINBASE_AMOUNT+fees {
 		return fmt.Errorf("reward mismatch")
 	}
 	return nil
@@ -44,8 +45,8 @@ func (bt *BlockTransactions) Validate() error {
 
 func (bt BlockTransactions) String() string {
 	var builder strings.Builder
-	builder.WriteString(fmt.Sprintf("cTxn: %s\n", &bt.cTxn))
-	for i, txn := range bt.rTxns {
+	builder.WriteString(fmt.Sprintf("cTxn: %s\n", &bt.CTxn))
+	for i, txn := range bt.RTxns {
 		builder.WriteString(fmt.Sprintf("rTxns[%d]: %s\n", i, &txn))
 	}
 	return builder.String()
