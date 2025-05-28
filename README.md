@@ -6,4 +6,8 @@
 - extended with support for transaction fees
 - a Simulation program for peer-to-peer block/transaction propagation
 
-See []
+## Usage
+`go run gcoin/examples/currency`
+See [`go.yml`](.github/workflows/go.yml) for details.
+
+Check out [`tutorial.md`](tutorial.md) if you want to make your own too.
