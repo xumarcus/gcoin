@@ -7,13 +7,13 @@ import (
 )
 
 type BlockHeader struct {
-	Diff      uint64
-	Index     uint64
-	InnerHash util.Hash
-	Nonce     uint64
-	PrevHash  util.Hash
-	Target    uint8
-	Timestamp int64
+	Diff      uint64    // Sum of block difficulties
+	Index     uint64    // chain[Index] == Block
+	InnerHash util.Hash // Data.Hash() == BlockHeader.InnerHash
+	Nonce     uint64    // The "Proof of work"
+	PrevHash  util.Hash // BlockHash of the previous block
+	Target    uint8     // Measures the difficulty of the proof
+	Timestamp int64     // When is the block created
 }
 
 func NewBlockHeader(innerHash util.Hash) BlockHeader {
@@ -73,7 +73,7 @@ func (bh *BlockHeader) Mine() util.Hash {
 }
 
 func (bh *BlockHeader) Validate() error {
-	if bh.Timestamp-60 >= time.Now().UnixMilli() {
+	if bh.Timestamp-NUM_MILLISECONDS_TIME_DIFF_TOLERANCE >= time.Now().UnixMilli() {
 		return fmt.Errorf("future block time Rule")
 	}
 	return nil
@@ -86,7 +86,7 @@ func (bh *BlockHeader) ValidateSuccessor(succ *BlockHeader) error {
 	if succ.Diff != bh.Diff+(1<<succ.Target) {
 		return fmt.Errorf("diff mismatch")
 	}
-	if succ.Timestamp <= bh.Timestamp-60 {
+	if succ.Timestamp <= bh.Timestamp-NUM_MILLISECONDS_TIME_DIFF_TOLERANCE {
 		return fmt.Errorf("past time rule")
 	}
 	return nil

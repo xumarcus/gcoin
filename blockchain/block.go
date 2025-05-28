@@ -20,10 +20,6 @@ func NewBlock[T util.Hashable](data T) Block[T] {
 		Data:        data}
 }
 
-func (b Block[T]) Equal(other Block[T]) bool {
-	return b.BlockHash == other.BlockHash
-}
-
 func (b *Block[T]) Mine() {
 	b.BlockHash = b.BlockHeader.Mine()
 }
