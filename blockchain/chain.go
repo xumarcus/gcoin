@@ -4,13 +4,11 @@ import (
 	"fmt"
 	"gcoin/util"
 	"slices"
-	"strings"
-	"time"
 )
 
-type Chain[T any] []Block[T]
+type Chain[T util.Hashable] []Block[T]
 
-func NewChain[T any](s []T) Chain[T] {
+func NewChain[T util.Hashable](s []T) Chain[T] {
 	var chain Chain[T]
 	for _, data := range s {
 		b := chain.NextUnmintedBlock(data)
@@ -20,30 +18,21 @@ func NewChain[T any](s []T) Chain[T] {
 	return chain
 }
 
-func RebuildChain[T any](m map[util.Hash]Block[T], cur Block[T]) (Chain[T], error) {
-	var buf []Block[T]
+func RebuildChain[T util.Hashable](m map[util.Hash]Block[T], cur Block[T]) (Chain[T], error) {
+	var blocks []Block[T]
 	for {
-		buf = append(buf, cur)
-		if cur.Index == 0 {
+		blocks = append(blocks, cur)
+		if cur.BlockHeader.Index == 0 {
 			break
 		}
-		prev, ok := m[cur.prevHash]
+		prev, ok := m[cur.BlockHeader.PrevHash]
 		if !ok {
-			return nil, fmt.Errorf("no prev found among blocks for %#v", cur)
+			return nil, fmt.Errorf("prev not found")
 		}
 		cur = prev
 	}
-	slices.Reverse(buf)
-	return Chain[T](buf), nil
-}
-
-func (chain Chain[T]) String() string {
-	var builder strings.Builder
-	builder.WriteString(fmt.Sprintf("cd=%d len=%d\n", chain.GetCumulativeDifficulty(), len(chain)))
-	for _, b := range chain {
-		builder.WriteString(fmt.Sprintf("%s\n", b))
-	}
-	return builder.String()
+	slices.Reverse(blocks)
+	return Chain[T](blocks), nil
 }
 
 func (chain Chain[T]) NextUnmintedBlock(data T) Block[T] {
@@ -51,16 +40,19 @@ func (chain Chain[T]) NextUnmintedBlock(data T) Block[T] {
 	if last == nil {
 		return NewBlock(data)
 	}
-	b := Block[T]{
-		Index:     uint64(last.Index + 1),
-		Timestamp: time.Now().UnixMilli(),
-		Data:      data,
-		prevHash:  last.hash,
-		hash:      util.Hash{},
-		Nonce:     0}
-	b.Exp = chain.BlockExp(&b)
-	b.CmDf = last.CmDf + (1 << b.Exp)
-	return b
+
+	var ancestorTimestamp int64
+	index := last.BlockHeader.Index + 1
+	if index >= NUM_BLOCKS_BETWEEN_DIFFICULTY_ADJUSTMENT {
+		ancestorTimestamp = chain[index-NUM_BLOCKS_BETWEEN_DIFFICULTY_ADJUSTMENT].BlockHeader.Timestamp
+	}
+
+	innerHash := data.Hash()
+	blockHeader := last.BlockHeader.NextBlockHeader(innerHash, ancestorTimestamp)
+	return Block[T]{
+		BlockHash:   blockHeader.Hash(),
+		BlockHeader: blockHeader,
+		Data:        data}
 }
 
 func (chain Chain[T]) Append(b Block[T]) (Chain[T], error) {
@@ -70,62 +62,39 @@ func (chain Chain[T]) Append(b Block[T]) (Chain[T], error) {
 
 	last := util.Last(chain)
 	if last == nil {
-		if b.Index != 0 {
+		if b.BlockHeader.Index != 0 {
 			return nil, fmt.Errorf("index mismatch")
 		}
 		return Chain[T]{b}, nil
 	}
 
-	if err := last.ValidateNextBlock(&b); err != nil {
+	if err := last.ValidateSuccessor(&b); err != nil {
 		return nil, err
 	}
 	return append(chain, b), nil
 }
 
-func (chain Chain[T]) BlockExp(b *Block[T]) uint8 {
-	last := util.Last(chain)
-	if b.Index%NUM_BLOCKS_BETWEEN_DIFFICULTY_ADJUSTMENT != 0 {
-		return last.Exp
-	}
-
-	// expect b.index != 0
-	timeTaken := b.Timestamp - chain[b.Index-NUM_BLOCKS_BETWEEN_DIFFICULTY_ADJUSTMENT].Timestamp
-	if timeTaken > TIME_EXPECTED*2 {
-		if last.Exp > 0 {
-			return last.Exp - 1
-		} else {
-			return 0
-		}
-	} else if timeTaken < TIME_EXPECTED/2 {
-		return last.Exp + 1
-	} else {
-		return last.Exp
-	}
-}
-
 func (chain Chain[T]) Validate() error {
 	n := len(chain)
 	if n == 0 {
-		return fmt.Errorf("chain is empty")
+		return nil
 	}
 	for i := 0; i < n-1; i++ {
-		a := &chain[i]
-		b := &chain[i+1]
-		if err := a.ValidateNextBlock(b); err != nil {
+		if err := chain[i].ValidateSuccessor(&chain[i+1]); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (chain Chain[T]) GetCumulativeDifficulty() uint64 {
+func (chain Chain[T]) Difficulty() uint64 {
 	last := util.Last(chain)
 	if last == nil {
 		return 0
 	}
-	return last.CmDf
+	return last.BlockHeader.Diff
 }
 
 func (chain Chain[T]) Less(other Chain[T]) bool {
-	return chain.GetCumulativeDifficulty() < other.GetCumulativeDifficulty()
+	return chain.Difficulty() < other.Difficulty()
 }

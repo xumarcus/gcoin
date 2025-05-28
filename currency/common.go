@@ -4,7 +4,6 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/sha256"
-	"fmt"
 	"gcoin/blockchain"
 	"gcoin/util"
 )
@@ -29,17 +28,19 @@ type TxOut struct {
 	Amount  uint64
 }
 
-func (txOut TxOut) String() string {
-	return fmt.Sprintf("$%d->%s", txOut.Amount, txOut.Address)
-}
-
 type TxIn struct {
 	TxId   TxId
 	OutIdx uint64
 }
 
-func (txIn TxIn) String() string {
-	return fmt.Sprintf("%s[%d]", txIn.TxId, txIn.OutIdx)
+type TxData struct {
+	TxIns     []TxIn
+	TxOuts    []TxOut
+	Timestamp int64
+}
+
+func (txData *TxData) Hash() util.Hash {
+	return util.NewHash(txData)
 }
 
 type Witness struct {

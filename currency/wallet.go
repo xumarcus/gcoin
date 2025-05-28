@@ -42,17 +42,10 @@ func (wallet *Wallet) MakeWitness(txId TxId) Witness {
 		pub: wallet.GetPub()}
 }
 
-func (wallet *Wallet) approveTransaction(txn *RegularTransaction, transactionFee uint64) {
-	txn.transactionFee = transactionFee
-	txn.Timestamp = time.Now().UnixMilli()
-	txn.txId = ComputeTxId(txn)
-	txn.witness = wallet.MakeWitness(txn.txId)
-}
-
-func (wallet *Wallet) fundTransaction(utxoDb *UtxoDb, txn *RegularTransaction, amount uint64) (uint64, error) {
+func (wallet *Wallet) sourceTxIns(utxoDb *UtxoDb, txData *TxData, amount uint64) (uint64, error) {
 	address := wallet.GetAddress()
 	for txIn := range utxoDb.uTxIns[address].Iter() {
-		txn.TxIns = append(txn.TxIns, txIn)
+		txData.TxIns = append(txData.TxIns, txIn)
 		txOut, ok := utxoDb.uTxOuts[txIn]
 		if !ok {
 			return 0, fmt.Errorf("txIn %v invalid", txIn)
@@ -73,15 +66,22 @@ func (wallet *Wallet) MakeRegularTransaction(utxoDb *UtxoDb, recvAddress Address
 	if amount == 0 {
 		return nil, fmt.Errorf("nothing to send")
 	}
-	txn := RegularTransaction{
-		TxOuts: []TxOut{{Address: recvAddress, Amount: amount}}}
-	if change, err := wallet.fundTransaction(utxoDb, &txn, amount+transactionFee); err != nil {
+	txData := TxData{
+		TxOuts:    []TxOut{{Address: recvAddress, Amount: amount}},
+		Timestamp: time.Now().UnixMilli()}
+	if change, err := wallet.sourceTxIns(utxoDb, &txData, amount+transactionFee); err != nil {
 		return nil, err
 	} else {
 		if change != 0 {
-			txn.TxOuts = append(txn.TxOuts, TxOut{Address: wallet.GetAddress(), Amount: change})
+			txOut := TxOut{Address: wallet.GetAddress(), Amount: change}
+			txData.TxOuts = append(txData.TxOuts, txOut)
 		}
-		wallet.approveTransaction(&txn, transactionFee)
-		return &txn, nil
 	}
+	txId := txData.Hash()
+	txn := RegularTransaction{
+		TransactionFee: transactionFee,
+		TxId:           txId,
+		TxData:         txData,
+		Witness:        wallet.MakeWitness(txId)}
+	return &txn, nil
 }

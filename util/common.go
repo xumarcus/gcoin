@@ -11,7 +11,3 @@ func Last[E any](s []E) *E {
 type Validated interface {
 	Validate() error
 }
-
-type Timestamped interface {
-	Timestamp() int64
-}

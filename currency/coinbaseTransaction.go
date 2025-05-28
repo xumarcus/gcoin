@@ -1,37 +1,34 @@
 package currency
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 type CoinbaseTransaction struct {
-	txId      TxId
-	TxOut     TxOut
-	Timestamp int64
-}
-
-func (txn *CoinbaseTransaction) GetTxId() TxId {
-	return txn.txId
-}
-
-func (txn *CoinbaseTransaction) GetTxIns() []TxIn {
-	return nil
-}
-
-func (txn *CoinbaseTransaction) GetTxOuts() []TxOut {
-	return []TxOut{txn.TxOut}
-}
-
-func (txn *CoinbaseTransaction) GetTimestamp() int64 {
-	return txn.Timestamp
+	TxId   TxId
+	TxData TxData
 }
 
 func (txn *CoinbaseTransaction) Validate() error {
-	txId := ComputeTxId(txn)
-	if txn.txId != txId {
-		return fmt.Errorf("txId mismatch: %s != %s", txn.txId, txId)
+	txId := txn.TxData.Hash()
+	if txn.TxId != txId {
+		return fmt.Errorf("txId mismatch: %s != %s", txn.TxId, txId)
 	}
 	return nil
 }
 
-func (txn CoinbaseTransaction) String() string {
-	return fmt.Sprintf("(t=%d) [%s]\n%s\n", txn.Timestamp, txn.txId, txn.TxOut)
+func (txn *CoinbaseTransaction) Amount() uint64 {
+	return txn.TxData.TxOuts[0].Amount
+}
+
+func NewCoinbaseTransaction(address Address, amount uint64) CoinbaseTransaction {
+	txData := TxData{
+		TxOuts:    []TxOut{{address, amount}},
+		Timestamp: time.Now().UnixMilli(),
+	}
+	return CoinbaseTransaction{
+		TxId:   txData.Hash(),
+		TxData: txData,
+	}
 }
