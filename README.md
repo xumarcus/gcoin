@@ -9,4 +9,4 @@
 ## Usage
 `go run gcoin/examples/currency`
 
-Check out [`tutorial.md`](tutorial.md) if you want to make your own too.
+Check out the [Wiki](https://github.com/xumarcus/gcoin/wiki) for tutorial if you want to make your own too.
