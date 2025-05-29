@@ -37,11 +37,11 @@ func (b *Block[T]) Validate() error {
 	return nil
 }
 
-func (b *Block[T]) ValidateSuccessor(succ *Block[T]) error {
-	if err := b.BlockHeader.ValidateSuccessor(&succ.BlockHeader); err != nil {
+func (b *Block[T]) ValidateWithPrev(prev *Block[T]) error {
+	if err := b.BlockHeader.ValidateWithPrev(&prev.BlockHeader); err != nil {
 		return err
 	}
-	if b.BlockHash != succ.BlockHeader.PrevHash {
+	if b.BlockHeader.PrevHash != prev.BlockHash {
 		return fmt.Errorf("prevHash mismatch")
 	}
 	return nil

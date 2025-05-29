@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"gcoin/util"
 	"slices"
+	"time"
 )
 
 type Chain[T util.Hashable] []Block[T]
@@ -19,9 +20,9 @@ func NewChain[T util.Hashable](s []T) Chain[T] {
 }
 
 func RebuildChain[T util.Hashable](m map[util.Hash]Block[T], cur Block[T]) (Chain[T], error) {
-	var blocks []Block[T]
+	var chain Chain[T]
 	for {
-		blocks = append(blocks, cur)
+		chain = append(chain, cur)
 		if cur.BlockHeader.Index == 0 {
 			break
 		}
@@ -31,8 +32,36 @@ func RebuildChain[T util.Hashable](m map[util.Hash]Block[T], cur Block[T]) (Chai
 		}
 		cur = prev
 	}
-	slices.Reverse(blocks)
-	return Chain[T](blocks), nil
+	slices.Reverse(chain)
+	if err := chain.Validate(); err != nil {
+		return nil, err
+	}
+	return chain, nil
+}
+
+func (chain Chain[T]) ComputeTarget(bh *BlockHeader) uint8 {
+	index := bh.Index
+	if index == 0 {
+		return 0
+	}
+
+	prev := &chain[index-1].BlockHeader
+	if index%NUM_BLOCKS_BETWEEN_DIFFICULTY_ADJUSTMENT != 0 {
+		return prev.Target
+	}
+
+	ancestor := &chain[index-NUM_BLOCKS_BETWEEN_DIFFICULTY_ADJUSTMENT].BlockHeader
+	timeTaken := bh.Timestamp - ancestor.Timestamp
+	if timeTaken > TIME_EXPECTED*2 {
+		if prev.Target == 0 {
+			return 0
+		}
+		return prev.Target - 1
+	} else if timeTaken < TIME_EXPECTED/2 {
+		return prev.Target + 1
+	} else {
+		return prev.Target
+	}
 }
 
 func (chain Chain[T]) NextUnmintedBlock(data T) Block[T] {
@@ -40,47 +69,57 @@ func (chain Chain[T]) NextUnmintedBlock(data T) Block[T] {
 	if last == nil {
 		return NewBlock(data)
 	}
-
-	var ancestorTimestamp int64
-	index := last.BlockHeader.Index + 1
-	if index >= NUM_BLOCKS_BETWEEN_DIFFICULTY_ADJUSTMENT {
-		ancestorTimestamp = chain[index-NUM_BLOCKS_BETWEEN_DIFFICULTY_ADJUSTMENT].BlockHeader.Timestamp
-	}
-
-	innerHash := data.Hash()
-	blockHeader := last.BlockHeader.NextBlockHeader(innerHash, ancestorTimestamp)
+	bh := &last.BlockHeader
+	index := bh.Index + 1
+	blockHeader := BlockHeader{
+		Index:     index,
+		InnerHash: data.Hash(),
+		Nonce:     0,
+		PrevHash:  bh.Hash(),
+		Timestamp: time.Now().UnixMilli()}
+	blockHeader.Target = chain.ComputeTarget(&blockHeader)
+	blockHeader.Diff = bh.Diff + (1 << blockHeader.Target)
 	return Block[T]{
 		BlockHash:   blockHeader.Hash(),
 		BlockHeader: blockHeader,
 		Data:        data}
 }
 
-func (chain Chain[T]) Append(b Block[T]) (Chain[T], error) {
+func (chain Chain[T]) ValidateNextBlock(b *Block[T]) error {
+	if b.BlockHeader.Index != uint64(len(chain)) {
+		return fmt.Errorf("index != len")
+	}
+	return chain.ValidateBlock(b)
+}
+
+func (chain Chain[T]) ValidateBlock(b *Block[T]) error {
 	if err := b.Validate(); err != nil {
-		return nil, err
+		return err
 	}
+	bh := &b.BlockHeader
 
-	last := util.Last(chain)
-	if last == nil {
-		if b.BlockHeader.Index != 0 {
-			return nil, fmt.Errorf("index mismatch")
+	switch index := bh.Index; {
+	case index > uint64(len(chain)):
+		return fmt.Errorf("index too big")
+	case index == 0:
+		if !bh.isGenesisBlockHeader() {
+			return fmt.Errorf("not isGenesisBlockHeader")
 		}
-		return Chain[T]{b}, nil
+	default:
+		prev := &chain[index-1]
+		if err := b.ValidateWithPrev(prev); err != nil {
+			return err
+		}
+		if bh.Target != chain.ComputeTarget(bh) {
+			return fmt.Errorf("target mismatch")
+		}
 	}
-
-	if err := last.ValidateSuccessor(&b); err != nil {
-		return nil, err
-	}
-	return append(chain, b), nil
+	return nil
 }
 
 func (chain Chain[T]) Validate() error {
-	n := len(chain)
-	if n == 0 {
-		return nil
-	}
-	for i := 0; i < n-1; i++ {
-		if err := chain[i].ValidateSuccessor(&chain[i+1]); err != nil {
+	for i := range chain {
+		if err := chain.ValidateBlock(&chain[i]); err != nil {
 			return err
 		}
 	}

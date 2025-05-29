@@ -44,9 +44,9 @@ func (wallet *Wallet) MakeWitness(txId TxId) Witness {
 
 func (wallet *Wallet) sourceTxIns(utxoDb *UtxoDb, txData *TxData, amount uint64) (uint64, error) {
 	address := wallet.GetAddress()
-	for txIn := range utxoDb.uTxIns[address].Iter() {
+	for txIn := range utxoDb.uTxIns[address] {
 		txData.TxIns = append(txData.TxIns, txIn)
-		txOut, ok := utxoDb.uTxOuts[txIn]
+		txOut, ok := utxoDb.mapTxInTxOut[txIn]
 		if !ok {
 			return 0, fmt.Errorf("txIn %v invalid", txIn)
 		}

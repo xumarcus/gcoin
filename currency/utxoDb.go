@@ -4,35 +4,44 @@ import (
 	"cmp"
 	"fmt"
 	"slices"
-
-	mapset "github.com/deckarep/golang-set/v2"
 )
 
 type UtxoDb struct {
-	uTxIns  map[Address]mapset.Set[TxIn]
-	uTxOuts map[TxIn]TxOut
+	uTxIns       map[Address]map[TxIn]struct{}
+	mapTxInTxOut map[TxIn]TxOut
 }
 
 // Assume validated
 func (utxoDb *UtxoDb) UpdateTxData(txData *TxData) {
 	for _, txIn := range txData.TxIns {
-		txOut := utxoDb.uTxOuts[txIn]
-		if utxoDb.uTxIns[txOut.Address] != nil {
-			utxoDb.uTxIns[txOut.Address].Remove(txIn)
-		}
-		delete(utxoDb.uTxOuts, txIn)
+		txOut := utxoDb.mapTxInTxOut[txIn]
+		delete(utxoDb.uTxIns[txOut.Address], txIn)
 	}
 
 	txId := txData.Hash()
 	for i, txOut := range txData.TxOuts {
 		txIn := TxIn{TxId: txId, OutIdx: uint64(i)}
-		if utxoDb.uTxIns[txOut.Address] == nil {
-			// When utxoDb is deep copied, the mutex in NewSet will be copied too
-			// Hence we must use NewThreadUnsafeSet here
-			utxoDb.uTxIns[txOut.Address] = mapset.NewThreadUnsafeSet[TxIn]()
+		s, ok := utxoDb.uTxIns[txOut.Address]
+		if !ok {
+			s = make(map[TxIn]struct{})
+			utxoDb.uTxIns[txOut.Address] = s
 		}
-		utxoDb.uTxIns[txOut.Address].Add(txIn)
-		utxoDb.uTxOuts[txIn] = txOut
+		s[txIn] = struct{}{}
+		utxoDb.mapTxInTxOut[txIn] = txOut
+	}
+}
+
+// Assume UpdateTxData(txData) is called prior
+func (utxoDb *UtxoDb) UndoUpdateTxData(txData *TxData) {
+	for _, txIn := range txData.TxIns {
+		txOut := utxoDb.mapTxInTxOut[txIn]
+		utxoDb.uTxIns[txOut.Address][txIn] = struct{}{}
+	}
+
+	txId := txData.Hash()
+	for i, txOut := range txData.TxOuts {
+		txIn := TxIn{TxId: txId, OutIdx: uint64(i)}
+		delete(utxoDb.uTxIns[txOut.Address], txIn)
 	}
 }
 
@@ -47,13 +56,15 @@ func (utxoDb *UtxoDb) UpdateFromBlockTransactions(bt *BlockTransactions) {
 func (utxoDb *UtxoDb) ValidateRegularTransaction(txn *RegularTransaction) error {
 	var transactionFee uint64
 	address := txn.Witness.GetAddress()
+	s := utxoDb.uTxIns[address]
 	for _, txIn := range txn.TxData.TxIns {
-		txOut, ok := utxoDb.uTxOuts[txIn]
-		if address != txOut.Address {
-			return fmt.Errorf("address mismatch")
-		}
+		_, ok := s[txIn]
 		if !ok {
 			return fmt.Errorf("txIn %v invalid", txIn)
+		}
+		txOut, ok := utxoDb.mapTxInTxOut[txIn]
+		if !ok {
+			return fmt.Errorf("txIn %v no txOut", txIn)
 		}
 		transactionFee += txOut.Amount
 	}
@@ -70,11 +81,27 @@ func (utxoDb *UtxoDb) ValidateRegularTransaction(txn *RegularTransaction) error 
 	return nil
 }
 
+func (utxoDb *UtxoDb) FilterRegularTransactions(mempool []RegularTransaction) []RegularTransaction {
+	var txns []RegularTransaction
+	for _, txn := range mempool {
+		if err := utxoDb.ValidateRegularTransaction(&txn); err != nil {
+			continue
+		}
+		utxoDb.UpdateTxData(&txn.TxData)
+		txns = append(txns, txn)
+	}
+
+	for _, txn := range txns {
+		utxoDb.UndoUpdateTxData(&txn.TxData)
+	}
+	return txns
+}
+
 func (utxoDb *UtxoDb) AvailableFunds(address Address) uint64 {
 	if uTxIns, ok := utxoDb.uTxIns[address]; ok {
 		var funds uint64
-		for txIn := range uTxIns.Iter() {
-			if txOut, ok := utxoDb.uTxOuts[txIn]; ok {
+		for txIn := range uTxIns {
+			if txOut, ok := utxoDb.mapTxInTxOut[txIn]; ok {
 				funds += txOut.Amount
 			} else {
 				panic(fmt.Errorf("txIn %v not found", txIn))
@@ -101,8 +128,8 @@ func (utxoDb *UtxoDb) Summary() []Tally {
 
 func NewUtxoDb() UtxoDb {
 	return UtxoDb{
-		uTxIns:  make(map[Address]mapset.Set[TxIn]),
-		uTxOuts: make(map[TxIn]TxOut)}
+		uTxIns:       make(map[Address]map[TxIn]struct{}),
+		mapTxInTxOut: make(map[TxIn]TxOut)}
 }
 
 func NewUtxoDbFromChain(chain Chain) UtxoDb {

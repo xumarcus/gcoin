@@ -9,6 +9,4 @@
 ## Usage
 `go run gcoin/examples/currency`
 
-See [`go.yml`](.github/workflows/go.yml) for details on deployment.
-
 Check out [`tutorial.md`](tutorial.md) if you want to make your own too.

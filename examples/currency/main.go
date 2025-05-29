@@ -12,10 +12,6 @@ import (
 	"gcoin/blockchain"
 	c "gcoin/currency"
 	"gcoin/util"
-
-	"github.com/jinzhu/copier"
-
-	mapset "github.com/deckarep/golang-set/v2"
 )
 
 type Node struct {
@@ -25,7 +21,7 @@ type Node struct {
 		utxoDb  c.UtxoDb
 		mempool []c.RegularTransaction // Assume validated
 	}
-	txIds   mapset.Set[c.TxId]    // Exclusive to handleTransaction
+	txIds   map[c.TxId]struct{}   // Exclusive to handleTransaction
 	blocks  map[util.Hash]c.Block // Exclusive to handleBlock
 	rd      rand.Rand
 	rBlock  chan c.Block
@@ -68,18 +64,7 @@ func (node *Node) prepareNextUnmintedBlock() c.Block {
 	node.mu.Lock()
 	defer node.mu.Unlock()
 
-	var utxoDb c.UtxoDb
-	copier.Copy(&utxoDb, &node.protected.utxoDb)
-
-	var txns []c.RegularTransaction
-	for _, txn := range node.protected.mempool {
-		if err := utxoDb.ValidateRegularTransaction(&txn); err != nil {
-			continue
-		}
-		utxoDb.UpdateTxData(&txn.TxData)
-		txns = append(txns, txn)
-	}
-
+	txns := node.protected.utxoDb.FilterRegularTransactions(node.protected.mempool)
 	address := node.wallet.GetAddress()
 	bt := c.NewBlockTransactions(txns, address)
 	return node.protected.chain.NextUnmintedBlock(bt)
@@ -88,9 +73,12 @@ func (node *Node) prepareNextUnmintedBlock() c.Block {
 // Mine should not hold the lock while it is mining the next block
 func (node *Node) Mine() {
 	b := node.prepareNextUnmintedBlock()
+	b.Mine()
 
-	// If a node mines blocks within the same millisecond, then the coinbase txIds can collide
+	// If a node mines blocks within the same millisecond
+	// then the coinbase txIds can collide
 	<-time.After(50 * time.Millisecond)
+
 	select {
 	case node.rMined <- b:
 	case <-time.After(2 * time.Second):
@@ -121,13 +109,17 @@ func (node *Node) handleBlock(b c.Block) error {
 		return nil
 	}
 
-	chain, err := blockchain.RebuildChain(node.blocks, b)
-	if err != nil {
-		panic(err)
+	if err := node.protected.chain.ValidateNextBlock(&b); err != nil {
+		if chain, err := blockchain.RebuildChain(node.blocks, b); err != nil {
+			return err
+		} else {
+			node.protected.chain = chain
+			node.protected.utxoDb = c.NewUtxoDbFromChain(chain)
+		}
+	} else {
+		node.protected.chain = append(node.protected.chain, b)
+		node.protected.utxoDb.UpdateFromBlockTransactions(&b.Data)
 	}
-
-	node.protected.chain = chain
-	node.protected.utxoDb = c.NewUtxoDbFromChain(chain)
 	return nil
 }
 
@@ -169,10 +161,11 @@ func (node *Node) handleTransaction(txn c.RegularTransaction) error {
 	}
 
 	txId := txn.TxId
-	if node.txIds.Contains(txId) {
+	_, ok := node.txIds[txId]
+	if ok {
 		return fmt.Errorf("duplicate found")
 	}
-	node.txIds.Add(txId)
+	node.txIds[txId] = struct{}{}
 
 	node.mu.Lock()
 	defer node.mu.Unlock()
@@ -189,12 +182,10 @@ func (node *Node) handleMinedBlock(b c.Block) error {
 	node.mu.Lock()
 	defer node.mu.Unlock()
 
-	chain, err := node.protected.chain.Append(b)
-	if err != nil {
+	if err := node.protected.chain.ValidateNextBlock(&b); err != nil {
 		return err
 	}
-
-	node.protected.chain = chain
+	node.protected.chain = append(node.protected.chain, b)
 	node.protected.utxoDb.UpdateFromBlockTransactions(&b.Data)
 	return nil
 }
@@ -237,11 +228,11 @@ func (node *Node) makeSimulatedTransaction(nodes []Node) (*c.RegularTransaction,
 }
 
 // Sim performs the node simulation by:
-// 1. Waiting a random delay (100-350ms)
+// 1. Waiting a random delay (100-1000ms)
 // 2. Creating a simulated transaction
 // 3. Sending it to the transaction channel
 func (node *Node) Sim(nodes []Node) {
-	ms := 100 + node.rd.IntN(250)
+	ms := 100 + node.rd.IntN(900)
 	<-time.After(time.Duration(ms) * time.Millisecond)
 
 	txn, err := node.makeSimulatedTransaction(nodes)
@@ -302,7 +293,7 @@ func main() {
 
 		node.rd = *rand.New(rand.NewPCG(42, uint64(i)))
 		node.wallet = c.NewWallet()
-		node.txIds = mapset.NewSet[c.TxId]()
+		node.txIds = make(map[c.TxId]struct{})
 		node.blocks = make(map[util.Hash]c.Block)
 
 		node.protected.utxoDb = c.NewUtxoDb()
